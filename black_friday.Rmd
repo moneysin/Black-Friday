@@ -1,0 +1,177 @@
+---
+title: "black_friday"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library(plyr)
+library(dplyr)
+library(dummies)
+library(ggplot2)
+library(xgboost)
+library(randomForest)
+```
+
+
+
+```{r}
+black_train= read.csv("file:///C:/Users/Administrator/Desktop/train.csv",stringsAsFactors = FALSE, header = TRUE,na.strings = c('NA',''))
+black_test= read.csv("file:///C:/Users/Administrator/Desktop/test.csv",stringsAsFactors = FALSE, header = TRUE, na.strings = c('NA',''))
+
+str(black_train)
+colSums(is.na(black_train))
+
+purc= black_train %>% group_by(Product_ID) %>% summarise(avg= mean(Purchase))
+```
+
+Changing the variable into factors and creating dummy columns for city for better working of algorithm
+
+```{r}
+black_train$Gender= if_else(black_train$Gender=="M", 1, 0)
+black_train$Age[black_train$Age=="0-17"]= 15
+black_train$Age[black_train$Age=="18-25"]= 21
+black_train$Age[black_train$Age=="26-35"]= 31
+black_train$Age[black_train$Age=="36-45"]= 41
+black_train$Age[black_train$Age=="46-50"]= 48
+black_train$Age[black_train$Age=="51-55"]= 53
+black_train$Age[black_train$Age=="55+"]= 60
+black_train$Stay_In_Current_City_Years[black_train$Stay_In_Current_City_Years=="4+"]=5
+black_train <- dummy.data.frame(black_train, names=c("City_Category"), sep="_")
+
+
+black_train$Gender= as.integer(black_train$Gender)
+black_train$Age= as.integer(black_train$Age)
+black_train$Stay_In_Current_City_Years= as.integer(black_train$Stay_In_Current_City_Years)
+
+
+black_test$Gender= if_else(black_test$Gender=="M", 1, 0)
+black_test$Age[black_test$Age=="0-17"]= 15
+black_test$Age[black_test$Age=="18-25"]= 21
+black_test$Age[black_test$Age=="26-35"]= 31
+black_test$Age[black_test$Age=="36-45"]= 41
+black_test$Age[black_test$Age=="46-50"]= 48
+black_test$Age[black_test$Age=="51-55"]= 53
+black_test$Age[black_test$Age=="55+"]= 60
+black_test$Stay_In_Current_City_Years[black_test$Stay_In_Current_City_Years=="4+"]=5
+black_test <- dummy.data.frame(black_test, names=c("City_Category"), sep="_")
+
+
+black_test$Gender= as.integer(black_test$Gender)
+black_test$Age= as.integer(black_test$Age)
+black_test$Stay_In_Current_City_Years= as.integer(black_test$Stay_In_Current_City_Years)
+
+```
+
+
+Count of each user based on user_id
+```{r}
+userIDCount <- as.data.frame(table(black_train$User_ID))
+names(userIDCount) <- c("User_ID","User_Purchase_Count")
+userIDCount$User_ID= as.integer(as.character(userIDCount$User_ID))
+black_train <- merge( black_train, userIDCount, by = "User_ID")
+
+
+
+userIDCount <- as.data.frame(table(black_test$User_ID))
+names(userIDCount) <- c("User_ID","User_Purchase_Count")
+userIDCount$User_ID= as.integer(as.character(userIDCount$User_ID))
+black_test <- merge( black_test, userIDCount, by = "User_ID")
+
+
+```
+
+
+Count of each product based on product_id
+```{r}
+
+productIDCount= as.data.frame(table(black_train$Product_ID))
+names(productIDCount)= c("Product_ID", "Product_Count")
+productIDCount$Product_ID= as.character(productIDCount$Product_ID)
+black_train= merge(black_train, productIDCount, by= "Product_ID")
+
+
+
+
+productIDCount= as.data.frame(table(black_test$Product_ID))
+names(productIDCount)= c("Product_ID", "Product_Count")
+productIDCount$Product_ID= as.character(productIDCount$Product_ID)
+black_test= merge(black_test, productIDCount, by= "Product_ID")
+
+```
+
+Imputing values based on average purchase by creating another column and filling test set with the value wherever required
+
+```{r}
+detach("package:plyr", unload=TRUE) 
+train_part= black_train %>% group_by(Product_ID) %>% summarise(avg= mean(Purchase))
+dim(train_part)
+
+ggplot(train_part, aes(avg, countt)) + geom_point()
+black_train= merge(black_train, train_part, by="Product_ID")
+
+k= as.data.frame(black_train)
+k$Purchase=mean(black_train$Purchase)
+
+black_test= merge(black_test, train_part, by="Product_ID", all.x=T)
+black_test$avg[is.na(black_test$avg)]= mean(black_train$Purchase)
+```
+
+
+Using XGBoost
+
+```{r}
+train_label= black_train$Purchase
+#test_label= black_test$Purchase
+
+new_train= subset(black_train, select=-c(Purchase, Product_ID))
+new_test= subset(black_test, select=-c(Product_ID))
+
+data_train= xgb.DMatrix(data=data.matrix(new_train),label= train_label)
+#data_test= xgb.DMatrix(data=data.matrix(new_test), label)
+
+params= list(booster="gbtree", objective="reg:linear", eta=0.3, 
+             gamma=0, max_depth=6, min_child_weight=1, subsample=1, 
+             colsample_bytree=1)
+
+xgbcv= xgb.cv( params = params, data = data_train, nrounds = 100, nfold = 5, showsd = T, print.every.n = 10, early.stop.round = 20, maximize = F)
+
+xgb1= xgboost(params = params, data = data_train, nrounds = 79, print.every.n = 10, early.stop.round = 20, maximize = F)
+
+pred= predict(xgb1, data.matrix(new_test))
+
+```
+
+
+```{r}
+submission<- black_test[,c("User_ID","Product_ID")]
+submission$Purchase= pred
+
+write.csv(submission, "file://C:/Users/Administrator/Desktop/submit.csv", row.names=F)
+```
+
+MSE: 2611.376
+
+
+
+
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
